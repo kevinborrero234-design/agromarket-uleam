@@ -58,7 +58,7 @@ function mostrarToast(mensaje, tipo = "success") {
 
 // ── Atajo secreto Ctrl+Shift+A ──
 document.addEventListener("keydown", async (e) => {
-  if (e.ctrlKey && e.shiftKey && e.key.toUpperCase() === "A") {
+  if (e.ctrlKey && e.altKey && e.key.toUpperCase() === "A") {
     e.preventDefault();
     const user = auth.currentUser;
     if (!user) return;
