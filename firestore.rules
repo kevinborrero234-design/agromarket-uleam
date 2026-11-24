@@ -1,0 +1,49 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function logueado() { return request.auth != null; }
+    function rolDe(uid) {
+      return get(/databases/$(database)/documents/usuarios/$(uid)).data.rol;
+    }
+    function esAdmin() { return logueado() && rolDe(request.auth.uid) == 'administrador'; }
+
+    match /usuarios/{uid} {
+      allow read: if logueado() && (request.auth.uid == uid || esAdmin());
+      // Al registrarse solo puedes crearte a ti mismo y siempre como cliente
+      allow create: if esAdmin() ||
+        (logueado() && request.auth.uid == uid && request.resource.data.rol == 'cliente');
+      // Nadie (salvo admin) puede cambiar su propio rol
+      allow update: if esAdmin() ||
+        (request.auth.uid == uid && request.resource.data.rol == resource.data.rol);
+      allow delete: if esAdmin();
+    }
+
+    match /categorias/{id}     { allow read: if logueado(); allow write: if esAdmin(); }
+    match /zonas_delivery/{id} { allow read: if logueado(); allow write: if esAdmin(); }
+
+    match /productos/{id} {
+      allow read: if logueado();
+      allow create, delete: if esAdmin();
+      // Un cliente solo puede BAJAR el stock (al comprar), nunca subirlo
+      allow update: if esAdmin() || (logueado()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['stock_actual'])
+        && request.resource.data.stock_actual >= 0
+        && request.resource.data.stock_actual < resource.data.stock_actual);
+    }
+
+    match /pedidos/{id} {
+      allow read: if logueado() && (resource.data.cliente_id == request.auth.uid
+        || resource.data.repartidor_id == request.auth.uid || esAdmin());
+      allow create: if logueado() && request.resource.data.cliente_id == request.auth.uid
+        && request.resource.data.estado == 'pendiente';
+      allow update: if esAdmin() || (logueado() && resource.data.repartidor_id == request.auth.uid);
+    }
+
+    match /movimientos_stock/{id} {
+      allow create: if logueado();
+      allow read: if esAdmin();
+      allow update, delete: if false;   // bitácora: solo se agrega
+    }
+  }
+}
