@@ -112,3 +112,8 @@ async function agregarStock(productoId, cantidad, motivo, usuarioId) {
   });
   await registrarMovimiento(productoId, "entrada", cantidad, motivo, usuarioId);
 }
+
+async function obtenerProducto(id) {
+  const doc = await db.collection("productos").doc(id).get();
+  return doc.exists ? { id: doc.id, ...doc.data() } : null;
+}

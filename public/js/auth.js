@@ -43,6 +43,7 @@ function protegerPagina(rolesPermitidos = []) {
 }
 
 async function cerrarSesion() {
+  localStorage.removeItem("agromarket_carrito");
   await auth.signOut();
   window.location.href = "/login.html";
 }

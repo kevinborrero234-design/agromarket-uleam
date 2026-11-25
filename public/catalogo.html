@@ -10,10 +10,17 @@
 <body>
   <nav class="navbar navbar-agro px-3">
     <span class="navbar-brand">🌱 Agro Market ULEAM</span>
-    <button class="btn btn-light btn-sm" onclick="cerrarSesion()">Cerrar sesión</button>
+    <div class="d-flex gap-2 align-items-center">
+      <a class="btn btn-light btn-sm" href="/carrito.html">🛒 Carrito <span id="badge" class="badge bg-danger">0</span></a>
+      <button class="btn btn-outline-light btn-sm" onclick="cerrarSesion()">Cerrar sesión</button>
+    </div>
   </nav>
+
   <div class="container mt-4">
-    <h4 id="saludo">Cargando...</h4>
+    <h5 id="saludo" class="mb-3">Cargando...</h5>
+    <input id="buscar" class="form-control mb-3" placeholder="🔍 Buscar producto...">
+    <div id="filtros" class="d-flex flex-wrap gap-2 mb-4"></div>
+    <div id="grid" class="row g-3"></div>
   </div>
 
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
@@ -23,11 +30,97 @@
   <script src="/js/modelos.js"></script>
   <script src="/js/auth.js"></script>
   <script src="/js/db.js"></script>
+  <script src="/js/carrito.js"></script>
   <script>
     protegerPagina(["cliente", "administrador"]);
-    function iniciarPagina(usuario) {
-      document.getElementById("saludo").textContent =
-        "Hola, " + usuario.nombreCompleto() + " (" + usuario.rol + ")";
+
+    const carrito = new Carrito();
+    let productos = [];
+    let categorias = [];
+    let categoriaActiva = "todas";
+
+    const normalizar = (t) => String(t || "").toLowerCase()
+      .normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+
+    async function iniciarPagina(usuario) {
+      document.getElementById("saludo").textContent = "Hola, " + usuario.nombre;
+      [categorias, productos] = await Promise.all([listarCategorias(), listarProductos(true)]);
+
+      pintarFiltros();
+      pintarProductos();
+      actualizarBadge();
+
+      document.getElementById("buscar").addEventListener("input", pintarProductos);
+      document.getElementById("grid").addEventListener("click", onClickGrid);
+      document.getElementById("filtros").addEventListener("click", onClickFiltro);
+      window.addEventListener("carrito-cambio", actualizarBadge);
+    }
+
+    function actualizarBadge() {
+      document.getElementById("badge").textContent = carrito.cantidadItems();
+    }
+
+    function pintarFiltros() {
+      const botones = [{ id: "todas", nombre: "Todas" }, ...categorias];
+      document.getElementById("filtros").innerHTML = botones.map(c => `
+        <button class="btn btn-sm ${c.id === categoriaActiva ? "btn-agro" : "btn-outline-success"}"
+                data-cat="${esc(c.id)}">${esc(c.nombre)}</button>`).join("");
+    }
+
+    function onClickFiltro(e) {
+      const btn = e.target.closest("[data-cat]");
+      if (!btn) return;
+      categoriaActiva = btn.dataset.cat;
+      pintarFiltros();
+      pintarProductos();
+    }
+
+    function pintarProductos() {
+      const texto = normalizar(document.getElementById("buscar").value);
+      const lista = productos.filter(p =>
+        (categoriaActiva === "todas" || p.categoria_id === categoriaActiva) &&
+        normalizar(p.nombre).includes(texto));
+
+      const grid = document.getElementById("grid");
+      if (lista.length === 0) {
+        grid.innerHTML = '<p class="text-muted">No hay productos para mostrar.</p>';
+        return;
+      }
+      grid.innerHTML = lista.map(p => {
+        const paso = pasoDe(p.unidad);
+        const agotado = p.stock_actual <= 0;
+        return `
+        <div class="col-6 col-md-4 col-lg-3">
+          <div class="card card-producto h-100">
+            ${p.imagen_url
+              ? `<img src="${esc(p.imagen_url)}" class="card-img-top" style="height:160px;object-fit:cover" alt="${esc(p.nombre)}">`
+              : `<div class="text-center fs-1 py-4">🥬</div>`}
+            <div class="card-body d-flex flex-column">
+              <h6 class="mb-0">${esc(p.nombre)}</h6>
+              <small class="text-muted">${esc(p.categoria_nombre)}</small>
+              <div class="fw-bold mt-1">$${Number(p.precio).toFixed(2)} / ${esc(p.unidad)}</div>
+              <small class="${agotado ? "text-danger" : "text-muted"}">
+                ${agotado ? "Agotado" : "Disponible: " + p.stock_actual}
+              </small>
+              <div class="input-group input-group-sm mt-auto pt-2">
+                <input id="qty-${esc(p.id)}" type="number" class="form-control"
+                       min="${paso}" step="${paso}" value="${paso}" ${agotado ? "disabled" : ""}>
+                <button class="btn btn-agro" data-add="${esc(p.id)}" ${agotado ? "disabled" : ""}>🛒 Agregar</button>
+              </div>
+            </div>
+          </div>
+        </div>`;
+      }).join("");
+    }
+
+    function onClickGrid(e) {
+      const btn = e.target.closest("[data-add]");
+      if (!btn) return;
+      const id = btn.dataset.add;
+      const producto = productos.find(p => p.id === id);
+      const cantidad = parseFloat(document.getElementById("qty-" + id).value);
+      const r = carrito.agregar(producto, cantidad);
+      mostrarToast(r.mensaje, r.ok ? "success" : "warning");
     }
   </script>
 </body>
