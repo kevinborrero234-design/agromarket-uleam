@@ -69,3 +69,14 @@ document.addEventListener("keydown", async (e) => {
     }
   }
 });
+
+// Textos y colores de cada estado (los reutilizan cliente, admin y repartidor)
+const ETIQUETAS_ESTADO = {
+  pendiente:          { texto: "Pendiente",          clase: "bg-warning text-dark" },
+  confirmado:         { texto: "Confirmado",         clase: "bg-info text-dark" },
+  en_preparacion:     { texto: "En preparación",     clase: "bg-primary" },
+  en_camino:          { texto: "En camino",          clase: "bg-success" },
+  listo_para_retirar: { texto: "Listo para retirar", clase: "bg-success" },
+  entregado:          { texto: "Entregado",          clase: "bg-secondary" },
+  cancelado:          { texto: "Cancelado",          clase: "bg-danger" }
+};

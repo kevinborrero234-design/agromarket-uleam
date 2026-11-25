@@ -117,3 +117,100 @@ async function obtenerProducto(id) {
   const doc = await db.collection("productos").doc(id).get();
   return doc.exists ? { id: doc.id, ...doc.data() } : null;
 }
+
+// ═══════════ PEDIDOS ═══════════
+function redondear2(n) { return Math.round(n * 100) / 100; }
+
+// Crea el pedido con una TRANSACCIÓN:
+// valida stock, descuenta, registra la bitácora y guarda el pedido, o no hace nada.
+async function crearPedido(d) {
+  const pedidoRef = db.collection("pedidos").doc();   // el id se genera antes
+  const esDelivery = d.tipo === "delivery";
+
+  await db.runTransaction(async (t) => {
+    // 1) LECTURAS (Firestore exige leer todo antes de escribir)
+    const refs = d.items.map(i => db.collection("productos").doc(i.producto_id));
+    const docs = await Promise.all(refs.map(r => t.get(r)));
+    const zonaDoc = esDelivery
+      ? await t.get(db.collection("zonas_delivery").doc(d.zona_id))
+      : null;
+
+    if (esDelivery && (!zonaDoc.exists || !zonaDoc.data().activo)) {
+      throw new Error("La zona de entrega seleccionada no está disponible");
+    }
+
+    // 2) VALIDAR y calcular con los datos REALES de la base, no con los del carrito
+    const detalles = [];
+    let subtotal = 0;
+    docs.forEach((doc, i) => {
+      const item = d.items[i];
+      if (!doc.exists || !doc.data().activo) {
+        throw new Error(`"${item.nombre}" ya no está disponible`);
+      }
+      const p = doc.data();
+      if (p.stock_actual < item.cantidad) {
+        throw new Error(`Stock insuficiente de "${p.nombre}": quedan ${p.stock_actual} ${p.unidad}`);
+      }
+      const sub = redondear2(p.precio * item.cantidad);
+      subtotal = redondear2(subtotal + sub);
+      detalles.push({
+        producto_id: doc.id,
+        nombre_producto: p.nombre,      // nombre COPIADO, no referencia
+        cantidad: item.cantidad,
+        precio_unitario: p.precio,      // precio CONGELADO al momento del pedido
+        subtotal: sub,
+        unidad: p.unidad
+      });
+    });
+
+    const tarifa = esDelivery ? zonaDoc.data().tarifa : 0;
+    const direccion = esDelivery
+      ? `${zonaDoc.data().nombre} — Piso ${d.piso} — ${d.aula}` + (d.referencia ? ` (${d.referencia})` : "")
+      : "Retiro en el Agro Market";
+
+    // 3) ESCRITURAS
+    detalles.forEach((det, i) => {
+      t.update(refs[i], { stock_actual: redondear2(docs[i].data().stock_actual - det.cantidad) });
+      t.set(db.collection("movimientos_stock").doc(), {
+        producto_id: det.producto_id,
+        tipo: "salida",
+        cantidad: det.cantidad,
+        motivo: "Pedido " + pedidoRef.id,
+        usuario_id: d.usuario.uid,
+        created_at: firebase.firestore.FieldValue.serverTimestamp()
+      });
+    });
+
+    t.set(pedidoRef, {
+      cliente_id: d.usuario.uid,
+      cliente_nombre: d.usuario.nombreCompleto(),
+      tipo: d.tipo,
+      estado: "pendiente",
+      subtotal,
+      tarifa_envio: tarifa,
+      total: redondear2(subtotal + tarifa),
+      zona_id: esDelivery ? d.zona_id : null,
+      direccion_entrega: direccion,
+      forma_pago: d.pago.forma_pago,
+      comprobante_url: d.pago.comprobante_url,
+      repartidor_id: null,
+      notas: d.notas || "",
+      detalles,                                  // array embebido
+      historial: [{                              // array append-only
+        estado_nuevo: "pendiente",
+        fecha: new Date().toISOString(),
+        nota: "Pedido creado",
+        usuario_id: d.usuario.uid
+      }],
+      created_at: firebase.firestore.FieldValue.serverTimestamp()
+    });
+  });
+
+  return pedidoRef.id;
+}
+
+async function listarPedidosCliente(uid) {
+  const snap = await db.collection("pedidos").where("cliente_id", "==", uid).get();
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }))
+    .sort((a, b) => (b.created_at?.toMillis?.() || 0) - (a.created_at?.toMillis?.() || 0));
+}
