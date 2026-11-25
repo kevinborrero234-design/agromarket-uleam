@@ -17,14 +17,19 @@
   </nav>
   <div class="container mt-4">
     <h4 id="saludo">Cargando...</h4>
-    <div class="row mt-3">
+        <div class="row mt-3 g-3">
+      <div class="col-md-4">
+        <a href="/admin/pedidos.html" class="card card-producto p-4 text-center text-decoration-none">
+          <h5>📋 Pedidos <span id="badge-pendientes" class="badge bg-warning text-dark">0</span></h5>
+          <small class="text-muted">pendientes por revisar</small>
+        </a>
+      </div>
       <div class="col-md-4">
         <a href="/admin/productos.html" class="card card-producto p-4 text-center text-decoration-none">
           <h5>📦 Productos y stock</h5>
         </a>
       </div>
     </div>
-  </div>
 
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
@@ -35,8 +40,11 @@
   <script src="/js/db.js"></script>
   <script>
     protegerPagina(["administrador"]);
-    function iniciarPagina(usuario) {
+        async function iniciarPagina(usuario) {
       document.getElementById("saludo").textContent = "Bienvenido, " + usuario.nombre;
+      const pedidos = await listarPedidos();
+      document.getElementById("badge-pendientes").textContent =
+        pedidos.filter(p => p.estado === "pendiente").length;
     }
   </script>
 </body>

@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pedidos — Agro Market ULEAM</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="/css/style.css" rel="stylesheet">
+</head>
+<body>
+  <nav class="navbar navbar-agro px-3">
+    <span class="navbar-brand">📋 Gestión de pedidos</span>
+    <div class="d-flex gap-2">
+      <button id="btn-actualizar" class="btn btn-light btn-sm">↻ Actualizar</button>
+      <a class="btn btn-light btn-sm" href="/admin/dashboard.html">Panel</a>
+      <button class="btn btn-outline-light btn-sm" onclick="cerrarSesion()">Cerrar sesión</button>
+    </div>
+  </nav>
+
+  <div class="container mt-4 mb-5">
+    <div id="filtros" class="d-flex flex-wrap gap-2 mb-3"></div>
+    <div id="lista"></div>
+  </div>
+
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+  <script src="/js/firebase-config.js"></script>
+  <script src="/js/modelos.js"></script>
+  <script src="/js/auth.js"></script>
+  <script src="/js/db.js"></script>
+  <script>
+    protegerPagina(["administrador"]);
+
+    let pedidos = [];
+    let repartidores = [];
+    let filtro = "todos";
+
+    async function iniciarPagina() {
+      repartidores = await listarUsuariosPorRol("repartidor");
+      document.getElementById("btn-actualizar").addEventListener("click", cargar);
+      document.getElementById("filtros").addEventListener("click", onClickFiltro);
+      document.getElementById("lista").addEventListener("click", onClickAccion);
+      await cargar();
+    }
+
+    async function cargar() {
+      pedidos = await listarPedidos();
+      pintarFiltros();
+      pintarLista();
+    }
+
+    // ── Filtros por estado ──
+    function pintarFiltros() {
+      const opciones = [["todos", "Todos"],
+        ...Object.entries(ETIQUETAS_ESTADO).map(([clave, e]) => [clave, e.texto])];
+      document.getElementById("filtros").innerHTML = opciones.map(([clave, texto]) => {
+        const n = clave === "todos" ? pedidos.length : pedidos.filter(p => p.estado === clave).length;
+        return `<button class="btn btn-sm ${clave === filtro ? "btn-agro" : "btn-outline-success"}"
+                  data-filtro="${clave}">${texto} (${n})</button>`;
+      }).join("");
+    }
+
+    function onClickFiltro(e) {
+      const btn = e.target.closest("[data-filtro]");
+      if (!btn) return;
+      filtro = btn.dataset.filtro;
+      pintarFiltros();
+      pintarLista();
+    }
+
+    // ── Lista de pedidos ──
+    function pintarLista() {
+      const lista = pedidos.filter(p => filtro === "todos" || p.estado === filtro);
+      document.getElementById("lista").innerHTML = lista.length
+        ? lista.map(tarjetaPedido).join("")
+        : '<p class="text-muted text-center py-5">No hay pedidos en este estado.</p>';
+    }
+
+    function htmlDetalles(p) {
+      return p.detalles.map(d =>
+        `<li>${esc(d.nombre_producto)} × ${d.cantidad} ${esc(d.unidad)} — $${Number(d.subtotal).toFixed(2)}</li>`
+      ).join("");
+    }
+
+    function htmlHistorial(p) {
+      return (p.historial || []).map(h => {
+        const texto = ETIQUETAS_ESTADO[h.estado_nuevo]?.texto || h.estado_nuevo;
+        return `<li>${esc(new Date(h.fecha).toLocaleString("es-EC"))} — <strong>${esc(texto)}</strong>${h.nota ? " · " + esc(h.nota) : ""}</li>`;
+      }).join("");
+    }
+
+    function htmlAcciones(p) {
+      const siguientes = transicionesDisponibles(p);   // ← patrón State
+      if (siguientes.length === 0) {
+        return '<span class="text-muted small">Estado final: no admite más cambios</span>';
+      }
+      const selector = siguientes.includes("en_camino")
+        ? `<select id="rep-${esc(p.id)}" class="form-select form-select-sm d-inline-block w-auto">
+             <option value="">Repartidor...</option>
+             ${repartidores.map(r => `<option value="${esc(r.uid)}">${esc(r.nombre)} ${esc(r.apellido)}</option>`).join("")}
+           </select>`
+        : "";
+      const botones = siguientes.map(estado => estado === "cancelado"
+        ? `<button class="btn btn-sm btn-outline-danger" data-id="${esc(p.id)}" data-estado="cancelado">Cancelar pedido</button>`
+        : `<button class="btn btn-sm btn-agro" data-id="${esc(p.id)}" data-estado="${estado}">→ ${esc(ETIQUETAS_ESTADO[estado].texto)}</button>`
+      ).join(" ");
+            const pista = (p.tipo === "delivery" && !siguientes.includes("en_camino"))
+        ? '<div class="small text-muted mt-1">🛵 El repartidor se asigna cuando el pedido está "En preparación"</div>'
+        : "";
+      return `<div class="d-flex flex-wrap gap-2 align-items-center">${selector}${botones}</div>${pista}`;
+    }
+
+    function tarjetaPedido(p) {
+      const e = ETIQUETAS_ESTADO[p.estado] || { texto: p.estado, clase: "bg-secondary" };
+      const fecha = p.created_at ? p.created_at.toDate().toLocaleString("es-EC") : "";
+      const comprobante = (p.forma_pago === "transferencia" && p.comprobante_url)
+        ? `<a href="${esc(p.comprobante_url)}" target="_blank" rel="noopener">Ver comprobante</a>`
+        : "";
+      return `
+      <div class="card mb-3">
+        <div class="card-body">
+          <div class="d-flex justify-content-between flex-wrap gap-2">
+            <div>
+              <strong>Pedido #${esc(p.id.slice(-6).toUpperCase())}</strong>
+              <small class="text-muted ms-2">${esc(fecha)}</small>
+              <div>👤 ${esc(p.cliente_nombre)}</div>
+            </div>
+            <span class="badge ${e.clase} align-self-start">${esc(e.texto)}</span>
+          </div>
+          <ul class="mt-2 mb-2">${htmlDetalles(p)}</ul>
+          <div class="small text-muted">
+            ${p.tipo === "delivery" ? "🛵" : "🏪"} ${esc(p.direccion_entrega)} ·
+            ${p.forma_pago === "efectivo" ? "💵 Efectivo" : "🏦 Transferencia"} ${comprobante}
+          </div>
+          ${p.notas ? `<div class="small mt-1">📝 ${esc(p.notas)}</div>` : ""}
+          ${p.repartidor_nombre ? `<div class="small mt-1">🛵 Repartidor: ${esc(p.repartidor_nombre)}</div>` : ""}
+          <div class="fw-bold mt-2">Total: $${Number(p.total).toFixed(2)}
+            <span class="fw-normal text-muted">(envío $${Number(p.tarifa_envio).toFixed(2)})</span>
+          </div>
+          <div class="mt-3">${htmlAcciones(p)}</div>
+          <details class="mt-2">
+            <summary class="small text-muted">Historial</summary>
+            <ul class="small mb-0">${htmlHistorial(p)}</ul>
+          </details>
+        </div>
+      </div>`;
+    }
+
+    // ── Acciones: cambiar de estado ──
+    async function onClickAccion(e) {
+      const btn = e.target.closest("[data-estado]");
+      if (!btn) return;
+      const { id, estado } = btn.dataset;
+      const extra = {};
+      let nota = "";
+
+      if (estado === "cancelado") {
+        const motivo = prompt("Motivo de la cancelación (el stock se devolverá):");
+        if (motivo === null) return;   // el admin se arrepintió
+        nota = motivo.trim();
+      }
+      if (estado === "en_camino") {
+        const uid = document.getElementById("rep-" + id).value;
+        const rep = repartidores.find(r => r.uid === uid);
+        if (!rep) return mostrarToast("Selecciona un repartidor", "warning");
+        extra.repartidor_id = rep.uid;
+        extra.repartidor_nombre = rep.nombre + " " + rep.apellido;
+      }
+
+      btn.disabled = true;
+      try {
+        await cambiarEstadoPedido(id, estado, window.usuarioActual, nota, extra);
+        mostrarToast("Estado actualizado");
+        await cargar();
+      } catch (err) {
+        mostrarToast(err.message, "danger");
+        btn.disabled = false;
+      }
+    }
+  </script>
+</body>
+</html>

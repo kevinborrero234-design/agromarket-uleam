@@ -214,3 +214,75 @@ async function listarPedidosCliente(uid) {
   return snap.docs.map(d => ({ id: d.id, ...d.data() }))
     .sort((a, b) => (b.created_at?.toMillis?.() || 0) - (a.created_at?.toMillis?.() || 0));
 }
+
+// ═══════════ PEDIDOS (ADMIN) ═══════════
+async function listarPedidos() {
+  const snap = await db.collection("pedidos").get();
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }))
+    .sort((a, b) => (b.created_at?.toMillis?.() || 0) - (a.created_at?.toMillis?.() || 0));
+}
+
+async function listarUsuariosPorRol(rol) {
+  const snap = await db.collection("usuarios").where("rol", "==", rol).get();
+  return snap.docs.map(d => ({ uid: d.id, ...d.data() }))
+    .filter(u => u.activo !== false)
+    .sort((a, b) => a.nombre.localeCompare(b.nombre));
+}
+
+// Único punto del sistema que cambia el estado de un pedido.
+async function cambiarEstadoPedido(pedidoId, nuevoEstado, usuario, nota = "", extra = {}) {
+  const pedidoRef = db.collection("pedidos").doc(pedidoId);
+
+  await db.runTransaction(async (t) => {
+    // 1) LECTURAS
+    const pedidoDoc = await t.get(pedidoRef);
+    if (!pedidoDoc.exists) throw new Error("El pedido no existe");
+    const pedido = { id: pedidoDoc.id, ...pedidoDoc.data() };
+
+    // PATRÓN STATE: ¿es legal esta transición?
+    if (!transicionesDisponibles(pedido).includes(nuevoEstado)) {
+      throw new Error(`No se puede cambiar de "${pedido.estado}" a "${nuevoEstado}"`);
+    }
+    if (nuevoEstado === "en_camino" && !extra.repartidor_id) {
+      throw new Error("Asigna un repartidor antes de enviar el pedido");
+    }
+
+    const cancelando = nuevoEstado === "cancelado";
+    let productos = [];
+    if (cancelando) {
+      productos = await Promise.all(
+        pedido.detalles.map(det => t.get(db.collection("productos").doc(det.producto_id)))
+      );
+    }
+
+    // 2) ESCRITURAS
+    if (cancelando) {
+      pedido.detalles.forEach((det, i) => {
+        if (!productos[i].exists) return;   // el producto pudo haberse eliminado
+        t.update(productos[i].ref, {
+          stock_actual: redondear2(productos[i].data().stock_actual + det.cantidad)
+        });
+        t.set(db.collection("movimientos_stock").doc(), {
+          producto_id: det.producto_id,
+          tipo: "entrada",
+          cantidad: det.cantidad,
+          motivo: "Cancelación pedido " + pedido.id,
+          usuario_id: usuario.uid,
+          created_at: firebase.firestore.FieldValue.serverTimestamp()
+        });
+      });
+    }
+
+    t.update(pedidoRef, {
+      estado: nuevoEstado,
+      ...extra,
+      historial: firebase.firestore.FieldValue.arrayUnion({   // append-only
+        estado_anterior: pedido.estado,
+        estado_nuevo: nuevoEstado,
+        fecha: new Date().toISOString(),
+        nota: nota,
+        usuario_id: usuario.uid
+      })
+    });
+  });
+}

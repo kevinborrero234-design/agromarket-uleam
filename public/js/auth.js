@@ -80,3 +80,13 @@ const ETIQUETAS_ESTADO = {
   entregado:          { texto: "Entregado",          clase: "bg-secondary" },
   cancelado:          { texto: "Cancelado",          clase: "bg-danger" }
 };
+
+// Estados que realmente se pueden ofrecer para ESTE pedido.
+// Parte de la tabla de transiciones y la filtra según el tipo de entrega.
+function transicionesDisponibles(pedido) {
+  return (TRANSICIONES_VALIDAS[pedido.estado] || []).filter(estado => {
+    if (estado === "en_camino") return pedido.tipo === "delivery";
+    if (estado === "listo_para_retirar") return pedido.tipo === "retiro";
+    return true;
+  });
+}
